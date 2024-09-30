@@ -1,7 +1,0 @@
-
-
-
-void calculate_time()
-{
-
-}
