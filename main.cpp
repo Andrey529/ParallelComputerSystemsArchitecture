@@ -1,34 +1,63 @@
-#include <mpi/mpi.h>
 #include <iostream>
+#include <mpi/mpi.h>
+#include <sstream>
 #include <vector>
 
-const int Tag = 0;
-const int root = 0;
+static constexpr int TAG = 0;
+static constexpr int ROOT_PROCESS_RANK = 0;
 
-double sum_array( std::vector< double > array, int n )
+bool IsRootProcess( int processRank )
 {
-     double sum = 0;
-     for (int i = 0; i < n; ++i)
+     return processRank == ROOT_PROCESS_RANK;
+}
+
+std::string OutputMatrix( const std::vector< std::vector< double > >& matrix )
+{
+     std::stringstream ss;
+     for ( const auto& row : matrix )
      {
-          sum += array[ i ];
+          for ( const auto& elem : row )
+          {
+               ss << elem << ' ';
+          }
+          ss << std::endl;
      }
-     return sum;
+
+     return ss.str();
 }
 
-void InitializeMatrixAndVector( std::vector< std::vector< double > >& matrix, std::vector< double > vec )
+std::string OutputVector( const std::vector< double >& vector )
 {
-     matrix =
+     std::stringstream ss;
+     for ( const auto& elem : vector )
+     {
+          ss << elem << ' ';
+     }
+     ss << std::endl;
+     return ss.str();
 }
 
-std::vector< double > MultiplyMatrixToVector( const std::vector< std::vector< double > >& matrix, const std::vector< double >& vector )
+void InitializeMatrixAndVector( std::vector< std::vector< double > >& matrix, std::vector< double >& vec )
+{
+     matrix = { { 1, 2, 3, 4, 5 },
+                { 6, 7, 8, 9, 10 },
+                { 11, 12, 13, 14, 15 },
+                { 16, 17, 18, 19, 20 },
+                { 21, 22, 23, 24, 25 } };
+
+     vec = { 1, 2, 3, 4, 5 };
+}
+
+std::vector< double > MultiplyMatrixToVector( const std::vector< std::vector< double > >& matrix,
+                                              const std::vector< double >& vector )
 {
      std::vector< double > result;
-     for ( int row = 0; row < matrix.size(); ++row )
+     for ( const auto& row : matrix )
      {
           double resultElem = 0;
-          for( int column = 0; column < matrix[ row ].size(); ++column )
+          for ( int column = 0; column < row.size(); ++column )
           {
-               resultElem += matrix[ row ][ column ] * vector[ column ];
+               resultElem += row[ column ] * vector[ column ];
           }
           result.emplace_back( resultElem );
      }
@@ -37,58 +66,116 @@ std::vector< double > MultiplyMatrixToVector( const std::vector< std::vector< do
 
 int main( int argc, char** argv )
 {
-     int rank, commSize;
+     int rank, size;
 
      MPI_Init( &argc, &argv );
      MPI_Comm_rank( MPI_COMM_WORLD, &rank );
-     MPI_Comm_size( MPI_COMM_WORLD, &commSize );
+     MPI_Comm_size( MPI_COMM_WORLD, &size );
 
-     double sum = 0;
-     std::vector< double > arr;
-     int n = 10;
+     std::vector< double > result;
      MPI_Status status;
 
-     if (root == rank)
+     if ( IsRootProcess( rank ) )
      {
+          std::cout << "Всего процессов = " << size << std::endl;
+
           std::vector< std::vector< double > > matrix;
           std::vector< double > vec;
 
-          for (int i = 0; i < n; ++i)
+          InitializeMatrixAndVector( matrix, vec );
+          std::cout << "Исходная матрица:\n" << OutputMatrix( matrix );
+          std::cout << "Исходная вектор: " << OutputVector( vec );
+
+          if ( matrix.size() != vec.size() )
           {
-               std::cout << "input vector " << i << " element = " << arr[ i ] << std::endl;
+               std::cerr << "Количество столбцов в матрице должно совпадать с количеством элементов в векторе.\n"
+                         << "Сейчас количество столбцов в матрице = " << matrix.size()
+                         << ", а количество элементов в векторе = " << vec.size() << std::endl;
           }
 
-          int partSize = n / commSize;
+          int elemCount = vec.size();
+          int partSize = elemCount / size;
+          int shift = elemCount % size;
 
-          int shift = n % commSize;
-          for (int i = root + 1; i < commSize; ++i)
+          // отправка матрицы и вектора в дочерние процессы для расчета
+          for ( int i = ROOT_PROCESS_RANK + 1; i < size; ++i )
           {
-               MPI_Send( arr.data() + shift + partSize * i, partSize, MPI_DOUBLE, i, Tag, MPI_COMM_WORLD );
+               MPI_Send( &partSize, 1, MPI_INT, i, TAG, MPI_COMM_WORLD );
+               for ( int j = shift + partSize * i; j < shift + partSize * ( i + 1 ); ++j )
+               {
+                    MPI_Send( &( matrix[ j ][ 0 ] ), elemCount, MPI_DOUBLE, i, TAG, MPI_COMM_WORLD );
+               }
+
+               MPI_Send( vec.data(), elemCount, MPI_DOUBLE, i, TAG, MPI_COMM_WORLD );
           }
-          sum = sum_array(arr, shift + partSize);
 
-          for (int i = root + 1; i < commSize; ++i)
+          // подсчет значения матрицы в root процессе
+          std::vector< std::vector< double > > rootMatrix;
+          for ( int i = 0; i < shift + partSize; ++i )
           {
-               double buffer;
-               MPI_Recv( &buffer, 1, MPI_DOUBLE, i, Tag, MPI_COMM_WORLD, &status );
-               sum += buffer;
+               rootMatrix.emplace_back( matrix[ i ] );
+          }
+          std::vector< double > rootResult = MultiplyMatrixToVector( rootMatrix, vec );
+
+          // вставка результата расчета root процесса в итоговый вектор
+          for ( const auto& elem : rootResult )
+          {
+               result.emplace_back( elem );
+          }
+
+          // получение результирующих векторов из дочерних процессов и вставка их в итоговый вектор
+          for ( int i = ROOT_PROCESS_RANK + 1; i < size; ++i )
+          {
+               std::vector< double > processResult;
+               processResult.resize( partSize );
+               MPI_Recv( &( processResult[ 0 ] ), partSize, MPI_DOUBLE, i, TAG, MPI_COMM_WORLD, &status );
+               for ( const auto& elem : processResult )
+               {
+                    result.emplace_back( elem );
+               }
           }
      }
      else
      {
-          MPI_Probe( root, Tag, MPI_COMM_WORLD, &status );
-          MPI_Get_count( &status, MPI_DOUBLE, &n );
+          // получение количества строк в матрице из root процесса
+          MPI_Probe( ROOT_PROCESS_RANK, TAG, MPI_COMM_WORLD, &status );
+          int rowsCount = 0;
+          MPI_Recv( &rowsCount, 1, MPI_INT, ROOT_PROCESS_RANK, TAG, MPI_COMM_WORLD, &status );
 
-          std::vector< double > localArr;
-          arr.resize( n );
-          MPI_Recv( arr.data(), n, MPI_DOUBLE, root, Tag, MPI_COMM_WORLD, &status );
+          // получение матрицы из root процесса
+          std::vector< std::vector< double > > localMatrix;
+          for ( int i = 0; i < rowsCount; ++i )
+          {
+               int elemsCount = 0;
+               MPI_Probe( ROOT_PROCESS_RANK, TAG, MPI_COMM_WORLD, &status );
+               MPI_Get_count( &status, MPI_DOUBLE, &elemsCount );
 
-          sum = sum_array( arr, n );
+               std::vector< double > row;
+               row.resize( elemsCount );
+               MPI_Recv( &( row[ 0 ] ), elemsCount, MPI_DOUBLE, ROOT_PROCESS_RANK, TAG, MPI_COMM_WORLD, &status );
+               localMatrix.emplace_back( row );
+          }
 
-          MPI_Send( &sum, 1, MPI_DOUBLE, root, Tag, MPI_COMM_WORLD );
+          std::cout << "Матрица в " << rank << " процессе =\n" << OutputMatrix( localMatrix );
+
+          // получение вектора из root процесса
+          int elemsCount = 0;
+          MPI_Probe( ROOT_PROCESS_RANK, TAG, MPI_COMM_WORLD, &status );
+          MPI_Get_count( &status, MPI_DOUBLE, &elemsCount );
+          std::vector< double > vec;
+          vec.resize( elemsCount );
+          MPI_Recv( &( vec[ 0 ] ), elemsCount, MPI_DOUBLE, ROOT_PROCESS_RANK, TAG, MPI_COMM_WORLD, &status );
+
+          std::cout << "Вектор в " << rank << " процессе = " << OutputVector( vec );
+
+          // расчет результата умножения матрицы на вектор
+          result = MultiplyMatrixToVector( localMatrix, vec );
+
+          // отправка результирующего вектора в root процесс
+          MPI_Send( &( result[ 0 ] ), result.size(), MPI_DOUBLE, ROOT_PROCESS_RANK, TAG, MPI_COMM_WORLD );
      }
 
-     std::cout << rank << " : " << sum << std::endl;
+     std::cout << "Результат умножения в " << rank << " процессе = " << OutputVector( result );
 
      MPI_Finalize();
 }
