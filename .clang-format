@@ -1,0 +1,36 @@
+ColumnLimit: 120
+
+UseTab: Never
+IndentWidth: 5
+
+AlignTrailingComments: true
+AccessModifierOffset : -5
+Standard : Auto
+SpacesInParentheses : true
+SpacesInContainerLiterals : true
+SpacesInCStyleCastParentheses : true
+SpacesInAngles : true
+SpacesInSquareBrackets: true
+PointerAlignment : Left
+Language : Cpp
+NamespaceIndentation : None
+BreakBeforeBraces : Allman
+AlignEscapedNewlines : Left
+#AlignConsecutiveAssignments: AcrossEmptyLinesAndComments
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowShortBlocksOnASingleLine : false
+AllowShortFunctionsOnASingleLine : Inline
+AllowShortIfStatementsOnASingleLine : false
+AllowShortLoopsOnASingleLine : false
+AlwaysBreakBeforeMultilineStrings: true
+AlwaysBreakTemplateDeclarations : true
+BinPackParameters : false
+ConstructorInitializerIndentWidth : 0
+IndentCaseLabels : true
+BreakConstructorInitializersBeforeComma : true
+FixNamespaceComments: true
+ForEachMacros:   
+  - foreach
+  - Q_FOREACH
+  - BOOST_FOREACH
+
